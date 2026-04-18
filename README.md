@@ -130,6 +130,81 @@ uv run python run_eval.py
 
 Results are saved to `results/` and detailed traces to `run_data/`.
 
+### RestFlow Result In This Fork
+
+This fork adds a `RestFlow` execution backend for `BU Bench V1` while keeping the upstream task set and Gemini judge unchanged.
+
+Current recorded result in this fork:
+
+- Framework: `RestFlow`
+- RestFlow version: `0.4.0`
+- RestFlow commit: `c5e7be718dff8886cda3c90df33cf044898d423b`
+- Runner: `ipc-adapter-v1`
+- Execution model: `gpt-5.4`
+- Judge model: `gemini-2.5-flash`
+- Benchmark: `BU Bench V1`
+- Run start: `20260417_225149`
+- Final score: `78 / 100`
+- Success rate: `78.0%`
+
+Tracked artifacts for this run:
+
+- Summary: [`RESTFLOW_BU_BENCH_RESULTS.md`](RESTFLOW_BU_BENCH_RESULTS.md)
+- Machine-readable result: [`restflow_results/bu_bench_v1_restflow_gpt_5_4_20260417_225149.json`](restflow_results/bu_bench_v1_restflow_gpt_5_4_20260417_225149.json)
+
+### Reproduce With RestFlow
+
+This fork supports running the benchmark with `RestFlow` instead of `browser-use.Agent(...)`.
+
+**1. Clone this fork**
+```bash
+git clone https://github.com/lhwzds/browser-use-benchmark.git
+cd browser-use-benchmark
+```
+
+**2. Start RestFlow daemon**
+```bash
+restflow daemon start --foreground
+```
+
+**3. Make sure RestFlow has a usable default agent**
+
+The benchmark run in this fork used the `Default Assistant` agent with the `browser` tool available.
+
+**4. Install benchmark dependencies**
+```bash
+pip install uv
+uv sync
+```
+
+**5. Set environment variables**
+```bash
+export GOOGLE_API_KEY=your_gemini_key   # required for the judge
+```
+
+If your RestFlow daemon uses a non-default home directory or socket location:
+```bash
+export RESTFLOW_DIR=/path/to/restflow-home
+```
+
+**6. Run BU Bench with RestFlow**
+
+Single task smoke test:
+```bash
+uv run python run_eval.py --framework restflow --tasks 1 --model gpt-5.4 --restflow-agent-id "Default Assistant"
+```
+
+Full benchmark:
+```bash
+uv run python run_eval.py --framework restflow --model gpt-5.4 --restflow-agent-id "Default Assistant"
+```
+
+Optional flags:
+
+- `--restflow-agent-id "<agent id or name>"` to choose a specific RestFlow agent
+- `--restflow-socket /path/to/restflow.sock` to override the default IPC socket
+- `--tasks N` to run only the first `N` tasks
+
 ### Swapping Models
 
 Edit `run_eval.py` to change the model:
