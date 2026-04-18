@@ -26,6 +26,23 @@
 
 <h1 align="center">Open-Source Benchmarks</h1>
 
+## RestFlow Result
+
+This fork includes a `RestFlow` execution backend for `BU Bench V1`.
+
+- Result: `78 / 100`
+- Framework: `RestFlow`
+- RestFlow version: `0.4.0`
+- RestFlow commit: `c5e7be718dff8886cda3c90df33cf044898d423b`
+- Runner: `ipc-adapter-v1`
+- Execution model: `gpt-5.4`
+- Judge model: `gemini-2.5-flash`
+
+See:
+
+- [`RESTFLOW_BU_BENCH_RESULTS.md`](RESTFLOW_BU_BENCH_RESULTS.md)
+- [`restflow_results/bu_bench_v1_restflow_gpt_5_4_20260417_225149.json`](restflow_results/bu_bench_v1_restflow_gpt_5_4_20260417_225149.json)
+
 <br/>
 
 ---
