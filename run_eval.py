@@ -36,6 +36,7 @@ from browser_use import Agent, Browser, ChatGoogle
 from browser_use.llm import ChatBrowserUse
 from browsers import PROVIDERS, get_provider
 from judge import construct_judge_messages, JudgementResult
+from restflow_runner import RestFlowBenchmarkRunner
 
 load_dotenv()
 
@@ -210,8 +211,110 @@ async def run_task(
             }
 
 
+async def run_task_restflow(
+    task: dict,
+    semaphore: asyncio.Semaphore,
+    runner: RestFlowBenchmarkRunner,
+    run_data_dir: Path = None,
+) -> dict:
+    async with semaphore:
+        task_id = task.get("task_id", "unknown")
+        try:
+            print(f"Running task: {task_id}")
+            result = await asyncio.wait_for(
+                runner.run_task(task["confirmed_task"]), timeout=TASK_TIMEOUT
+            )
+
+            steps = result["steps"]
+            duration = result["duration"]
+            cost = result["cost"]
+            agent_task = task["confirmed_task"]
+            final_result = result["final_result"]
+            agent_steps = result["agent_steps"]
+            ground_truth = task.get("answer")
+            screenshots_b64 = encode_screenshots(result["screenshot_paths"])
+
+            judge_messages = construct_judge_messages(
+                task=agent_task,
+                final_result=final_result,
+                agent_steps=agent_steps,
+                ground_truth=ground_truth,
+                screenshots_b64=screenshots_b64,
+            )
+            response = await JUDGE_LLM.ainvoke(
+                judge_messages, output_format=JudgementResult
+            )
+            judgement: JudgementResult = response.completion
+
+            score = 1 if judgement.verdict else 0
+            print(
+                f"Task {task_id} completed: score={score}, verdict={judgement.verdict}"
+            )
+
+            run_data_dir.mkdir(parents=True, exist_ok=True)
+            trace = {
+                "agent_task": agent_task,
+                "final_result": final_result,
+                "agent_steps": agent_steps,
+                "ground_truth": ground_truth,
+                "screenshots_b64": screenshots_b64,
+                "restflow_session_id": result["session_id"],
+                "restflow_agent_id": result["agent_id"],
+                "restflow_total_tokens": result["total_tokens"],
+            }
+            metrics = {"steps": steps, "duration": duration, "cost": cost}
+            (run_data_dir / f"{task_id}.json").write_text(
+                json.dumps(
+                    {
+                        "agent_trace": trace,
+                        "metrics": metrics,
+                        "judgement": judgement.model_dump(),
+                    },
+                    indent=2,
+                )
+            )
+
+            return {
+                "task_id": task_id,
+                "score": score,
+                "steps": steps,
+                "duration": duration,
+                "cost": cost,
+                "judgement": judgement.model_dump(),
+            }
+        except asyncio.TimeoutError:
+            print(f"Task {task_id} timed out after {TASK_TIMEOUT}s")
+            return {
+                "task_id": task_id,
+                "score": 0,
+                "steps": 0,
+                "duration": TASK_TIMEOUT,
+                "cost": 0,
+                "error": f"Task timed out after {TASK_TIMEOUT}s",
+            }
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = f"{error_type}: {e}"
+            print(f"Task {task_id} failed: {error_msg}")
+            return {
+                "task_id": task_id,
+                "score": 0,
+                "steps": 0,
+                "duration": 0,
+                "cost": 0,
+                "error": error_msg,
+                "traceback": traceback.format_exc(),
+            }
+
+
 async def main():
     parser = argparse.ArgumentParser(description="Run BU_Bench_V1 evaluation")
+    parser.add_argument(
+        "--framework",
+        default="browser-use",
+        choices=["browser-use", "restflow"],
+        help="Execution framework (default: browser-use)",
+    )
     parser.add_argument(
         "--browser",
         default="browser-use-cloud",
@@ -224,18 +327,47 @@ async def main():
         default=None,
         help="Number of tasks to run (default: all)",
     )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model name for the selected framework",
+    )
+    parser.add_argument(
+        "--restflow-agent-id",
+        default=None,
+        help="RestFlow agent id or name to use (default: auto-resolve 'default')",
+    )
+    parser.add_argument(
+        "--restflow-socket",
+        default=None,
+        help="Path to RestFlow IPC socket (default: ~/.restflow/restflow.sock)",
+    )
     args = parser.parse_args()
+
+    framework_name = args.framework
+    model_name = args.model or (
+        MODEL_NAME if framework_name == "browser-use" else "gpt-5.4"
+    )
 
     # Resolve browser provider (None = use native browser-use-cloud path)
     browser_name = args.browser
-    if browser_name == "browser-use-cloud":
+    if framework_name == "restflow":
+        browser_name = "restflow-ipc"
+        browser_provider = None
+    elif browser_name == "browser-use-cloud":
         browser_provider = None
     else:
         browser_provider = get_provider(browser_name)
 
     # Build run key and paths
     run_start = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_key = f"{AGENT_FRAMEWORK_NAME}_{AGENT_FRAMEWORK_VERSION}_browser_{browser_name}_model_{MODEL_NAME}"
+    framework_version = (
+        AGENT_FRAMEWORK_VERSION if framework_name == "browser-use" else "ipc-adapter-v1"
+    )
+    framework_label = (
+        AGENT_FRAMEWORK_NAME if framework_name == "browser-use" else "RestFlow"
+    )
+    run_key = f"{framework_label}_{framework_version}_browser_{browser_name}_model_{model_name}"
     run_data_dir = (
         Path(__file__).parent / "run_data" / f"{run_key}_start_at_{run_start}"
     )
@@ -245,14 +377,28 @@ async def main():
     if args.tasks:
         tasks = tasks[: args.tasks]
     sem = asyncio.Semaphore(MAX_CONCURRENT)
-    results = await asyncio.gather(
-        *[
-            run_task(
-                t, sem, browser_provider=browser_provider, run_data_dir=run_data_dir
-            )
-            for t in tasks
-        ]
-    )
+    if framework_name == "restflow":
+        runner = RestFlowBenchmarkRunner(
+            model=model_name,
+            socket_path=args.restflow_socket,
+            agent_id=args.restflow_agent_id,
+        )
+        results = await asyncio.gather(
+            *[run_task_restflow(t, sem, runner=runner, run_data_dir=run_data_dir) for t in tasks]
+        )
+    else:
+        results = await asyncio.gather(
+            *[
+                run_task(
+                    t,
+                    sem,
+                    browser_provider=browser_provider,
+                    llm=ChatBrowserUse(model=model_name),
+                    run_data_dir=run_data_dir,
+                )
+                for t in tasks
+            ]
+        )
 
     # Aggregate metrics
     successful = sum(1 for r in results if r.get("score") == 1)

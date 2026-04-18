@@ -1,0 +1,14 @@
+{
+  "framework": "RestFlow",
+  "adapter": "ipc-adapter-v1",
+  "model": "gpt-5.4",
+  "judge_model": "gemini-2.5-flash",
+  "benchmark": "BU Bench V1",
+  "run_start": "20260417_225149",
+  "tasks_completed": 100,
+  "tasks_successful": 78,
+  "success_rate": 0.78,
+  "total_steps": 99,
+  "total_duration": 13496.515814079496,
+  "total_cost": 0
+}
